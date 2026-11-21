@@ -1,0 +1,73 @@
+name: build-chinamax
+
+on:
+  schedule:
+    - cron: '0 20 * * 0'   # 每周一 04:00 CST
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Fetch ChinaMax (Clash format)
+        run: |
+          curl -sSL -o cm.list \
+            https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/master/rule/Clash/ChinaMax/ChinaMax.list
+          wc -l cm.list
+
+      - name: Convert to rule-set JSON
+        run: |
+          python3 - <<'EOF'
+          import json
+          suffix, exact = [], []
+          seen = set()
+          for line in open('cm.list', encoding='utf-8', errors='ignore'):
+              line = line.strip()
+              if not line or line.startswith('#'):
+                  continue
+              p = line.split(',')
+              if len(p) < 2:
+                  continue
+              t, d = p[0].strip().upper(), p[1].strip()
+              if not d:
+                  continue
+              if t == 'DOMAIN-SUFFIX':
+                  k = 's:' + d
+                  if k in seen: continue
+                  seen.add(k); suffix.append(d)
+              elif t == 'DOMAIN':
+                  k = 'e:' + d
+                  if k in seen: continue
+                  seen.add(k); exact.append(d)
+          rs = {"version": 3, "rules": [{"domain_suffix": suffix, "domain": exact}]}
+          json.dump(rs, open('chinamax.json', 'w'), ensure_ascii=False)
+          print('suffix', len(suffix), 'exact', len(exact))
+          EOF
+
+      - name: Install sing-box
+        run: |
+          VER=$(curl -sSL https://api.github.com/repos/SagerNet/sing-box/releases/latest | python3 -c "import sys,json;print(json.load(sys.stdin)['tag_name'].lstrip('v'))")
+          curl -sSL -o sb.tar.gz "https://github.com/SagerNet/sing-box/releases/download/v${VER}/sing-box-${VER}-linux-amd64.tar.gz"
+          tar xzf sb.tar.gz
+          mv sing-box-*/sing-box /usr/local/bin/
+          sing-box version
+
+      - name: Compile
+        run: |
+          sing-box rule-set compile -o chinamax.srs chinamax.json
+          ls -lh chinamax.srs
+
+      - name: Commit
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          rm -f cm.list chinamax.json sb.tar.gz
+          git add chinamax.srs
+          if git diff --staged --quiet; then
+            echo "no change"
+          else
+            git commit -m "rebuild chinamax.srs ($(date -u +%F))"
+            git push
+          fi
