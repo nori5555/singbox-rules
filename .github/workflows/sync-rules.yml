@@ -1,0 +1,63 @@
+name: sync-rules
+
+on:
+  schedule:
+    - cron: '0 20 * * 0'      # 每周一 04:00 CST
+  workflow_dispatch:
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download rule-sets
+        run: |
+          set -e
+          mkdir -p rules
+          LITE_GEOSITE="https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/sing/geo-lite/geosite"
+          LITE_GEOIP="https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/sing/geo-lite/geoip"
+          FULL="https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set"
+
+          # 国内主列表（lite）
+          curl -fsSL -o rules/geolocation-cn.srs "$LITE_GEOSITE/cn.srs"
+
+          # 应用组（lite）
+          for n in apple telegram netflix youtube spotify tiktok bilibili google microsoft; do
+            curl -fsSL -o "rules/$n.srs" "$LITE_GEOSITE/$n.srs"
+          done
+
+          # lite 里缺的，回落到全量
+          curl -fsSL -o rules/disney.srs          "$FULL/geosite-disney.srs"
+          curl -fsSL -o rules/category-ai--cn.srs "$FULL/geosite-category-ai-%21cn.srs"
+          curl -fsSL -o rules/category-games.srs  "$FULL/geosite-category-games.srs"
+
+          # geoip
+          curl -fsSL -o rules/geoip-cn.srs "$LITE_GEOIP/cn.srs"
+
+          echo "--- 下载结果 ---"
+          ls -lh rules/
+
+      - name: Sanity check
+        run: |
+          # 任何文件小于 100 字节都视为失败（防止把 404 页面提交进去）
+          bad=0
+          for f in rules/*.srs; do
+            sz=$(stat -c%s "$f")
+            if [ "$sz" -lt 100 ]; then
+              echo "FAIL $f only $sz bytes"; bad=1
+            fi
+          done
+          exit $bad
+
+      - name: Commit
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add rules
+          if git diff --staged --quiet; then
+            echo "no change"
+          else
+            git commit -m "sync rule-sets ($(date -u +%F))"
+            git push
+          fi
